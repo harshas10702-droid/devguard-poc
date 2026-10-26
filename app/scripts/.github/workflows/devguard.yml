@@ -1,0 +1,72 @@
+name: DevGuard
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Semgrep (code scan)
+        run: |
+          pip install semgrep
+          semgrep scan --config p/default --metrics=off --json -o semgrep.json || true
+
+      - name: Trivy (dependency scan)
+        uses: aquasecurity/trivy-action@master   # replace with a pinned release tag, see note below
+        with:
+          scan-type: fs
+          format: json
+          output: trivy.json
+          severity: HIGH,CRITICAL
+          exit-code: 0
+
+      - name: Save raw reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: devguard-reports
+          path: |
+            semgrep.json
+            trivy.json
+
+      - name: Comment summary on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const sg = JSON.parse(fs.readFileSync('semgrep.json', 'utf8')).results || [];
+            const tv = JSON.parse(fs.readFileSync('trivy.json', 'utf8'));
+            const vulns = (tv.Results || []).flatMap(r => r.Vulnerabilities || []);
+
+            let body = `## 🛡️ DevGuard Report\n\n`;
+            body += `**Code issues (Semgrep):** ${sg.length}\n`;
+            body += `**Vulnerable dependencies (Trivy, High/Critical):** ${vulns.length}\n\n`;
+
+            if (sg.length) {
+              body += `### Top code findings\n`;
+              sg.slice(0, 10).forEach(f => {
+                body += `- \`${f.path}:${f.start.line}\` ${f.check_id.split('.').pop()} (${f.extra.severity})\n`;
+              });
+            }
+            if (vulns.length) {
+              body += `\n### Top dependency findings\n`;
+              vulns.slice(0, 10).forEach(v => {
+                body += `- ${v.PkgName} ${v.InstalledVersion}: ${v.VulnerabilityID} (${v.Severity}), fix: ${v.FixedVersion || 'none yet'}\n`;
+              });
+            }
+            if (!sg.length && !vulns.length) body += `✅ No high-severity findings.\n`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
