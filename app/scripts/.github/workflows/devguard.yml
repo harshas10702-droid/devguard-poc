@@ -20,7 +20,7 @@ jobs:
           semgrep scan --config p/default --metrics=off --json -o semgrep.json || true
 
       - name: Trivy (dependency scan)
-        uses: aquasecurity/trivy-action@master   # replace with a pinned release tag, see note below
+uses: aquasecurity/trivy-action@0.28.0   # replace with a pinned release tag, see note below
         with:
           scan-type: fs
           format: json
